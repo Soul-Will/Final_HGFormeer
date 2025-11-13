@@ -1,0 +1,121 @@
+# Fine-tuning Configuration
+# File: configs/finetune_config.yaml
+# ✅ FIXED: All hyperparameters configurable (no hard-coded values)
+# ✅ FIXED: Augmentation parameters exposed
+# ✅ FIXED: Unfreeze LR factor configurable
+
+# ============================================================================
+# MODEL & CHECKPOINT
+# ============================================================================
+
+# Pretrained model checkpoint (from SSL)
+pretrained_checkpoint: "checkpoints/dry_run_ssl/best_model.pth"
+
+# Model configuration for segmentation
+model:
+  num_classes: 2  # Background + Foreground
+  freeze_encoder: true  # Freeze encoder initially
+  unfreeze_epoch: 5  # Unfreeze encoder after this many epochs
+
+# Decoder configuration
+decoder:
+  encoder_channels: [32, 64, 160, 256]  # Must match encoder output
+  decoder_channels: [256, 128, 64, 32]  # Decoder channel progression
+  use_attention: true  # Use attention gates in skip connections
+
+# ============================================================================
+# TRAINING HYPERPARAMETERS
+# ============================================================================
+
+training:
+  epochs: 3
+  batch_size: 1  # Smaller batch for segmentation (memory intensive)
+  
+  # Learning rate
+  learning_rate: 1.0e-4  # Initial LR for decoder
+  unfreeze_lr_factor: 0.1  # ✅ NEW: Multiply base LR by this when unfreezing
+  weight_decay: 0.01
+  gradient_clip: 1.0
+  
+  # Learning rate scheduler
+  scheduler: "ReduceLROnPlateau"  # Options: "ReduceLROnPlateau", "CosineAnnealing"
+  patience: 10  # Epochs to wait before reducing LR (ReduceLROnPlateau only)
+  lr_factor: 0.5  # Multiply LR by this factor when reducing
+  min_lr: 1.0e-6  # Minimum learning rate
+  
+  # Early stopping
+  early_stopping: true
+  early_stopping_patience: 2  # Stop if no improvement for N epochs
+  
+  # Checkpointing
+  val_freq: 1  # Validate every N epochs
+  save_freq: 10  # Save checkpoint every N epochs
+
+# ============================================================================
+# LOSS CONFIGURATION
+# ============================================================================
+
+loss:
+  # Combined loss: alpha * (Dice + Focal) + (1 - alpha) * Boundary
+  alpha_start: 1.0  # Initial weight for Dice+Focal (1.0 = full weight)
+  alpha_min: 0.01  # Minimum alpha value (0.01 = 1% weight)
+  decay_type: "linear"  # Options: "linear", "cosine", "exponential"
+  
+  # ✅ NEW: Boundary loss configuration
+  boundary_type: "weighted_dice"  # Options: "weighted_dice", "morphological", "none"
+  boundary_weight: 2.0  # Emphasis factor for boundary regions
+
+# ============================================================================
+# DATA CONFIGURATION
+# ============================================================================
+
+data:
+  # Data directories (full paths, no 'split' argument needed)
+  train_dir: "data/processed/volume_labeled/train"
+  val_dir: "data/processed/volume_labeled/val"
+  test_dir: "data/processed/volume_labeled/test"
+  patch_size: [64, 128, 128]  # (D, H, W)
+  samples_per_volume: 5  # Patches per volume per epoc
+  # Augmentation settings
+  use_augmentation: true
+  augmentation:
+    # Intensity augmentations
+    blur_std_range: [0, 1]
+    noise_std_range: [0, 0.05]
+    gamma_range: [-0.2, 0.2]
+    
+    # Spatial augmentations
+    affine_scales: [0.95, 1.05]
+    affine_degrees: 10
+    affine_translation: 3
+  
+  # Data loading
+  num_workers: 1
+  pin_memory: true
+  prefetch_factor: 2
+
+# ============================================================================
+# PATHS
+# ============================================================================
+
+paths:
+  output_dir: "checkpoints/dry_run_finetune"
+  log_dir: "logs/dry_run_finetune"
+
+# ============================================================================
+# VISUALIZATION
+# ============================================================================
+
+visualization:
+  save_predictions: true  # Save prediction images during training
+  save_freq: 20  # Save visualizations every N epochs
+  num_samples: 4  # Number of samples to visualize
+
+# ============================================================================
+# MIXED PRECISION TRAINING (OPTIONAL)
+# ============================================================================
+
+# Uncomment to enable mixed precision (saves memory, faster training)
+# amp:
+#   enabled: true
+#   opt_level: "O1"  # Options: "O0" (FP32), "O1" (mixed), "O2" (almost FP16)
