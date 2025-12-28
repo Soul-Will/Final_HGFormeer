@@ -66,6 +66,7 @@ class VolumeDataset3D(Dataset):
     def __init__(
         self,
         data_dir: str,
+        split: str = 'train',
         patch_size: Tuple[int, int, int] = (64, 128, 128),
         num_patches_per_epoch: int = 1000,
         transform: Optional[callable] = None,
@@ -113,9 +114,44 @@ class VolumeDataset3D(Dataset):
                 f"Please re-run prepare_data.py to convert to HDF5."
             )
         
+        if 'data' in metadata:
+            # NEW STRUCTURE: metadata.json has train/val/test splits
+            logger.info(f"  Using NEW metadata structure with splits")
+            
+            if split == 'all':
+                # Combine all splits
+                all_splits = []
+                for split_name in ['train', 'val', 'test']:
+                    if split_name in metadata['data']:
+                        all_splits.extend(metadata['data'][split_name])
+                volume_list = all_splits
+            elif split in metadata['data']:
+                volume_list = metadata['data'][split]
+            else:
+                raise ValueError(
+                    f"Split '{split}' not found in metadata. "
+                    f"Available: {list(metadata['data'].keys())}"
+                )
+        
+        elif 'volumes' in metadata:
+            # OLD STRUCTURE: metadata.json has flat 'volumes' list
+            logger.info(f"  Using OLD metadata structure (flat volumes list)")
+            logger.warning(
+                f"⚠️ No train/val/test splits found. Using all volumes for '{split}'.\n"
+                f"  Consider re-running prepare_data.py to generate splits."
+            )
+            volume_list = metadata['volumes']
+        
+        else:
+            raise ValueError(
+                f"Invalid metadata.json format. Expected either:\n"
+                f"  - 'data': {{train: [...], val: [...], test: [...]}}\n"
+                f"  - 'volumes': [...]"
+            )
+        
         # Extract volume information
         self.volumes = []
-        for vol_meta in metadata['volumes']:
+        for vol_meta in volume_list:
             vol_path = self.data_dir / vol_meta['file_path']
             
             if not vol_path.exists():
@@ -141,9 +177,10 @@ class VolumeDataset3D(Dataset):
             })
         
         if len(self.volumes) == 0:
-            raise ValueError(f"No valid volumes found in {self.data_dir}")
+            raise ValueError(f"No valid volumes found in {self.data_dir} for split '{split}'")
         
         logger.info(f"VolumeDataset3D initialized:")
+        logger.info(f"  Split: {split}")
         logger.info(f"  Volumes: {len(self.volumes)}")
         logger.info(f"  Storage: HDF5 (memory-efficient)")
         logger.info(f"  Patch size: {patch_size}")
@@ -604,51 +641,82 @@ class SELMA3DDataset(Dataset):
 # UTILITY: VALIDATE METADATA
 # ============================================================================
 
-def validate_metadata_format(data_dir: Path, data_type: str):
-    """Validate metadata.json format"""
-    metadata_path = data_dir / 'metadata.json'
-    
-    if not metadata_path.exists():
-        raise FileNotFoundError(f"metadata.json not found in {data_dir}")
-    
-    with open(metadata_path, 'r') as f:
-        metadata = json.load(f)
-    
-    # Check storage format
-    storage_format = metadata.get('storage_format', 'unknown')
-    if storage_format != 'hdf5':
-        logger.warning(
-            f"⚠️ Storage format is '{storage_format}', expected 'hdf5'.\n"
-            f"Please re-run prepare_data.py to convert to HDF5."
-        )
-    
-    if data_type == 'unlabeled':
-        required_fields = ['num_volumes', 'marker_types', 'volumes', 'storage_format']
-        for field in required_fields:
-            if field not in metadata:
-                raise ValueError(f"Missing field '{field}' in metadata.json")
-        
-        for vol in metadata['volumes']:
-            required_vol_fields = ['brain_name', 'marker_type', 'marker_label', 
-                                   'shape', 'file_path']
-            for field in required_vol_fields:
-                if field not in vol:
-                    raise ValueError(
-                        f"Missing field '{field}' in volume: {vol.get('brain_name', 'unknown')}"
-                    )
-    
-    elif data_type == 'labeled':
-        required_fields = ['num_samples', 'splits', 'data', 'storage_format']
-        for field in required_fields:
-            if field not in metadata:
-                raise ValueError(f"Missing field '{field}' in metadata.json")
-        
-        required_splits = ['train', 'val', 'test']
-        for split in required_splits:
-            if split not in metadata['data']:
-                raise ValueError(f"Missing split '{split}' in metadata")
-    
-    else:
-        raise ValueError(f"Invalid data_type: {data_type}")
-    
-    logger.info(f"✅ Metadata validation passed for {data_type} data")
+def validate_metadata_format(metadata: dict) -> None:
+    """
+    Validate metadata.json format.
+
+    Supports:
+    - Legacy flat format:
+        {
+          "volumes": [...]
+        }
+
+    - New split-aware format (v4.0.0+):
+        {
+          "data": {
+            "train": { "volumes": [...] },
+            "val":   { "volumes": [...] },
+            "test":  { "volumes": [...] }
+          }
+        }
+    """
+    if not isinstance(metadata, dict):
+        raise ValueError("metadata.json must be a JSON object")
+
+    # ============================
+    # NEW: Split-aware format
+    # ============================
+    if "data" in metadata:
+        data_section = metadata["data"]
+
+        if not isinstance(data_section, dict):
+            raise ValueError("'data' must be a dictionary")
+
+        found_any_split = False
+
+        for split_name in ("train", "val", "test"):
+            if split_name not in data_section:
+                continue
+
+            split = data_section[split_name]
+
+            if not isinstance(split, dict):
+                raise ValueError(f"'data.{split_name}' must be a dictionary")
+
+            if "volumes" not in split:
+                raise ValueError(
+                    f"Missing 'volumes' key in metadata['data']['{split_name}']"
+                )
+
+            if not isinstance(split["volumes"], list):
+                raise ValueError(
+                    f"'volumes' in data['{split_name}'] must be a list"
+                )
+
+            found_any_split = True
+
+        if not found_any_split:
+            raise ValueError(
+                "metadata['data'] does not contain any of: train / val / test"
+            )
+
+        # ✅ VALID split-aware metadata
+        return
+
+    # ============================
+    # LEGACY: Flat format
+    # ============================
+    if "volumes" in metadata:
+        if not isinstance(metadata["volumes"], list):
+            raise ValueError("'volumes' must be a list")
+        return
+
+    # ============================
+    # INVALID
+    # ============================
+    raise ValueError(
+        "Invalid metadata format.\n"
+        "Expected either:\n"
+        "  - Top-level 'volumes'\n"
+        "  - Or split-aware 'data.{train|val|test}.volumes'"
+    )

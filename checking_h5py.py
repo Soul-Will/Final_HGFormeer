@@ -2,7 +2,7 @@ import h5py
 from pathlib import Path
    
    # Check a file
-hdf5_files = list(Path('data/processed/volume_demo/').glob('**/*.h5'))
+hdf5_files = list(Path('data/processed/volumes_ssl/').glob('**/*.h5'))
 print(f"Found {len(hdf5_files)} HDF5 files")
    
    # Inspect one

@@ -35,6 +35,7 @@ from datetime import datetime
 from joblib import Parallel, delayed
 import sys
 from PIL import Image
+
 Image.MAX_IMAGE_PIXELS = None
 warnings.filterwarnings('ignore')
 
@@ -675,6 +676,7 @@ def process_and_stream_to_hdf5(
     try:
         from PIL import Image
         from scipy.ndimage import zoom
+        Image.MAX_IMAGE_PIXELS = None
     except ImportError:
         raise ImportError("Install dependencies: pip install Pillow scipy")
     
@@ -936,6 +938,7 @@ def process_brain_worker(
     Worker function to process a single unlabeled brain
     ✅ FIX: Improved error handling and skip logic
     """
+    Image.MAX_IMAGE_PIXELS = None
     brain_name = item['brain_name']
     output_file = output_marker_dir / f"{brain_name}.h5"
     
@@ -1060,7 +1063,199 @@ def process_brain_worker(
         logger.error(traceback.format_exc())
         return None
 
+def aggregate_metadata_unlabeled(
+    all_metadata: List[Dict],
+    output_dir: Path,
+    args: argparse.Namespace
+) -> Dict:
+    """
+    ✅ PERMANENT FIX: Generate final metadata.json with train/val/test splits
+    
+    This function:
+    - Aggregates per-volume metadata
+    - Creates stratified train/val/test splits (80/10/10)
+    - Exports global_threshold_norm for each volume
+    - Writes a production-ready metadata.json
+    
+    Args:
+        all_metadata: List of volume metadata dicts
+        output_dir: Root output directory
+        args: Command-line arguments
+    
+    Returns:
+        Complete metadata dictionary
+    """
+    from sklearn.model_selection import train_test_split
+    
+    logger.info("\n" + "="*80)
+    logger.info("GENERATING FINAL METADATA.JSON")
+    logger.info("="*80)
+    
+    # ============================================================================
+    # STEP 1: Extract marker types for stratification
+    # ============================================================================
+    marker_types = [vol['marker_type'] for vol in all_metadata]
+    unique_markers = list(set(marker_types))
+    
+    logger.info(f"Total volumes: {len(all_metadata)}")
+    logger.info(f"Unique markers: {unique_markers}")
+    
+    # ============================================================================
+    # STEP 2: Create stratified train/val/test splits
+    # ============================================================================
+    # ============================================================================
+# STEP 2: Adaptive dataset splits (PERMANENT FIX)
+# ============================================================================
 
+    N = len(all_metadata)
+
+    if N < 2:
+    # Case 1: Only one volume → train only
+        logger.warning(
+        "⚠️ Only one unlabeled volume found. "
+        "Assigning it to TRAIN split only."
+        )
+        train_meta = all_metadata
+        val_meta = []
+        test_meta = []
+
+    elif N < 5:
+        # Case 2: Too few samples for 3-way split
+        logger.warning(
+        f"⚠️ Only {N} unlabeled volumes found. "
+        "Using TRAIN / VAL split only (no TEST set)."
+        )
+        train_meta, val_meta = train_test_split(
+            all_metadata,
+            test_size=0.25,
+            random_state=42
+        )
+        test_meta = []
+
+    else:
+        # Case 3: Normal regime (≥5 volumes)
+        marker_types = [vol['marker_type'] for vol in all_metadata]
+
+        try:
+            train_meta, temp_meta = train_test_split(
+                all_metadata,
+                test_size=0.2,
+                stratify=marker_types,
+                random_state=42
+            )
+
+            temp_markers = [vol['marker_type'] for vol in temp_meta]
+            val_meta, test_meta = train_test_split(
+                temp_meta,
+                test_size=0.5,
+                stratify=temp_markers,
+                random_state=42
+            )
+
+        except ValueError as e:
+            logger.warning(
+                f"⚠️ Stratified split failed ({e}). "
+                "Falling back to RANDOM split."
+            )
+
+            train_meta, temp_meta = train_test_split(
+                all_metadata,
+                test_size=0.2,
+                random_state=42
+            )
+
+            if len(temp_meta) >= 2:
+                val_meta, test_meta = train_test_split(
+                    temp_meta,
+                    test_size=0.5,
+                    random_state=42
+                )
+            else:
+                val_meta = temp_meta
+                test_meta = []
+
+    
+    logger.info(f"  Train: {len(train_meta)} volumes")
+    logger.info(f"  Val:   {len(val_meta)} volumes")
+    logger.info(f"  Test:  {len(test_meta)} volumes")
+    
+    # ============================================================================
+    # STEP 3: Load global_threshold_norm from HDF5 files
+    # ============================================================================
+    logger.info("  Loading global_threshold_norm from HDF5 files...")
+    
+    for vol_meta in all_metadata:
+        h5_path = output_dir / vol_meta['file_path']
+        
+        try:
+            with h5py.File(h5_path, 'r') as f:
+                # Extract from HDF5 attributes
+                if 'global_threshold_norm' in f['volume'].attrs:
+                    vol_meta['global_threshold_norm'] = float(
+                        f['volume'].attrs['global_threshold_norm']
+                    )
+                else:
+                    # Fallback: compute from global_min/max/threshold
+                    g_min = float(f['volume'].attrs.get('global_min', 0))
+                    g_max = float(f['volume'].attrs.get('global_max', 1))
+                    g_thr = float(f['volume'].attrs.get('foreground_threshold', 0.95))
+                    
+                    if g_max > g_min:
+                        vol_meta['global_threshold_norm'] = (g_thr - g_min) / (g_max - g_min)
+                    else:
+                        vol_meta['global_threshold_norm'] = g_thr
+        
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to load threshold from {h5_path.name}: {e}")
+            vol_meta['global_threshold_norm'] = 0.95  # Safe default
+    
+    # ============================================================================
+    # STEP 4: Build final metadata structure
+    # ============================================================================
+    metadata_dict = {
+        'dataset_name': 'SELMA3D_SSL',
+        'num_volumes': len(all_metadata),
+        'marker_types': unique_markers,
+        'storage_format': 'hdf5',
+        'splits': {
+            'train': len(train_meta),
+            'val': len(val_meta),
+            'test': len(test_meta)
+        },
+        'data': {
+            'train': train_meta,
+            'val': val_meta,
+            'test': test_meta
+        },
+        'processing': {
+            'downsample_xy': args.downsample_xy,
+            'downsample_z': args.downsample_z,
+            'normalized': args.normalize,
+            'foreground_percentile': args.foreground_percentile,
+            'parallel_workers': args.num_workers,
+            'processed_at': datetime.now().isoformat()
+        },
+        'statistics': {
+            'total_size_mb': sum(v['file_size_mb'] for v in all_metadata),
+            'avg_compression_ratio': sum(
+                v.get('compression_ratio', 1.0) for v in all_metadata
+            ) / len(all_metadata)
+        }
+    }
+    
+    # ============================================================================
+    # STEP 5: Write metadata.json
+    # ============================================================================
+    metadata_path = output_dir / 'metadata.json'
+    
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata_dict, f, indent=2, default=str)
+    
+    logger.info(f"✅ Metadata saved: {metadata_path}")
+    logger.info(f"✅ Structure: train/val/test splits with {len(unique_markers)} markers")
+    logger.info("="*80)
+    
+    return metadata_dict
 # ============================================================================
 # PROCESS UNLABELED DATA
 # ============================================================================
@@ -1078,8 +1273,8 @@ def process_unlabeled_data(input_dir: Path, output_dir: Path, args) -> List[Dict
     
     # ✅ FIX: Make marker map configurable via args if needed
     marker_map = {
-        'ab_plaque': 3, 'ad_plaque': 3, 'cfos': 0,
-        'microglia': 4, 'nucleus': 2, 'unknown': 5, 'vessel': 1
+        'Ab_plaques': 3, 'ad_plaque': 3, 'cFos': 0,
+        'microglia': 4, 'cell_nucleus': 2, 'unknown': 5, 'vessel': 1
     }
     
     discovered_data = DatasetDiscovery.discover_unlabeled_data(input_dir)
@@ -1158,28 +1353,28 @@ def process_unlabeled_data(input_dir: Path, output_dir: Path, args) -> List[Dict
             logger.warning(f"    Failed: {failed_count}/{len(items)}")
     
     # Save metadata
-    metadata_path = output_dir / 'metadata.json'
-    with open(metadata_path, 'w') as f:
-        json.dump({
-            'num_volumes': len(all_metadata),
-            'marker_types': list(set(m['marker_type'] for m in all_metadata)),
-            'total_size_mb': sum(m['file_size_mb'] for m in all_metadata),
-            'volumes': all_metadata,
-            'storage_format': 'hdf5',
-            'processing': {
-                'parallel_workers': args.num_workers,
-                'processed_at': datetime.now().isoformat(),
-                'downsample_xy': args.downsample_xy,
-                'downsample_z': args.downsample_z,
-                'normalized': args.normalize,
-                'foreground_percentile': args.foreground_percentile
-            }
-        }, f, indent=2)
-    
+    # metadata_path = output_dir / 'metadata.json'
+    # with open(metadata_path, 'w') as f:
+    #     json.dump({
+    #         'num_volumes': len(all_metadata),
+    #         'marker_types': list(set(m['marker_type'] for m in all_metadata)),
+    #         'total_size_mb': sum(m['file_size_mb'] for m in all_metadata),
+    #         'volumes': all_metadata,
+    #         'storage_format': 'hdf5',
+    #         'processing': {
+    #             'parallel_workers': args.num_workers,
+    #             'processed_at': datetime.now().isoformat(),
+    #             'downsample_xy': args.downsample_xy,
+    #             'downsample_z': args.downsample_z,
+    #             'normalized': args.normalize,
+    #             'foreground_percentile': args.foreground_percentile
+    #         }
+    #     }, f, indent=2)
+    metadata_dict = aggregate_metadata_unlabeled(all_metadata, output_dir, args)
     logger.info(f"\n{'='*80}")
     logger.info(f"✅ Processed {len(all_metadata)} unlabeled volumes")
-    logger.info(f"✅ Total size: {sum(m['file_size_mb'] for m in all_metadata):.1f} MB")
-    logger.info(f"✅ Metadata saved: {metadata_path}")
+    logger.info(f"✅ Total size: {metadata_dict['statistics']['total_size_mb']:.1f} MB")
+    logger.info(f"✅ Metadata saved with train/val/test splits")
     logger.info(f"{'='*80}")
     
     return all_metadata

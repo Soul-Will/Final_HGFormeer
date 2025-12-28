@@ -8,3 +8,7 @@ try2.py
 verify_data.py
 verify_processed_image.py
 vis_processed_data.py
+see_labled_data.py
+vis_3D.py
+check_raw_data.py
+test_metadata_pipeline.py

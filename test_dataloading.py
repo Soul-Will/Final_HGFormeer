@@ -1,8 +1,8 @@
 from utils.data_loader import VolumeDataset3D
    
 dataset = VolumeDataset3D(
-    data_dir='data/processed/volume_demo/',
-    patch_size=(20, 128, 128),
+    data_dir='data/processed/volumes_ssl/',
+    patch_size=(5, 128, 128),
     num_patches_per_epoch=10
 )
    
