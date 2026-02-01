@@ -12,3 +12,16 @@ see_labled_data.py
 vis_3D.py
 check_raw_data.py
 test_metadata_pipeline.py
+check_file_content.py
+check_the_processed_stack.py
+checkpoints
+results
+new_checking_hd5f.py
+checking_h5py.py
+data_check.py
+test_dataloading.py
+test_init.py
+verify_amd_gpu.py
+requirements_rocm.txt
+
+setup_guide

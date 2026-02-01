@@ -85,10 +85,30 @@ class HGFormer3D_ForSegmentation(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv3d(decoder_channels[-1]//2, num_classes, 1)
         )
-        
+        #================Remove this if any error====================
+        self.decoder.apply(self._init_weights)
+        self.seg_head.apply(self._init_weights)
+        #====================================================
         # ✅ BUG FIX: Removed all broken _create_aligned_upsampler logic.
         # We will use F.interpolate at the end.
     
+#===================== Remove this if any error===================
+    def _init_weights(self, m):
+        """Initialize decoder and segmentation head"""
+        if isinstance(m, nn.Conv3d):
+            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        
+        elif isinstance(m, (nn.BatchNorm3d, nn.LayerNorm)):
+            nn.init.constant_(m.weight, 1.0)
+            nn.init.constant_(m.bias, 0)
+        
+        elif isinstance(m, nn.Linear):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+#===================================================================
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass with automatic size alignment

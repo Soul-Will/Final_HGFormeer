@@ -21,6 +21,12 @@ from models import HGFormer3D
 from models.losses import ssl_total_loss
 from utils.data_loader import VolumeDataset3D, validate_metadata_format
 from utils.augmentations import get_ssl_transforms
+from utils.scheduler_builder import build_scheduler
+from utils.debug_tools import (
+    verify_rotation_task,
+    visualize_contrastive_embeddings,
+    GradientMonitor
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -330,12 +336,13 @@ def main():
     logger.info(f"  Weight decay: {config['training']['weight_decay']}")
     
     # Learning rate scheduler
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=config['training']['epochs'],
-        eta_min=config['training'].get('min_lr', 1e-6)
-    )
-    
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    #     optimizer,
+    #     T_max=config['training']['epochs'],
+    #     eta_min=config['training'].get('min_lr', 1e-6)
+    # )
+    scheduler = build_scheduler(optimizer, config)
+
     logger.info(f"  Scheduler: CosineAnnealingLR")
     logger.info(f"  T_max: {config['training']['epochs']}")
     logger.info(f"  Min LR: {config['training'].get('min_lr', 1e-6)}")
@@ -344,6 +351,14 @@ def main():
     start_epoch = 0
     best_loss = float('inf')
     
+    grad_monitor = GradientMonitor(model)
+    debug_dir = output_dir / 'debug'
+    debug_dir.mkdir(exist_ok=True)
+    
+    logger.info("\n✅ Debug tools initialized:")
+    logger.info(f"  Gradient monitor: ACTIVE")
+    logger.info(f"  Debug output: {debug_dir}")
+
     if args.resume:
         logger.info(f"\nResuming from checkpoint: {args.resume}")
         checkpoint = torch.load(args.resume, map_location=device)
@@ -423,6 +438,8 @@ def main():
                     model.parameters(), 
                     config['training'].get('gradient_clip', 1.0)
                 )
+
+                grad_stats = grad_monitor.log_gradients()
                 
                 optimizer.step()
                 
@@ -434,7 +451,8 @@ def main():
                 # Update progress bar
                 pbar.set_postfix({
                     'loss': f"{loss.item():.4f}",
-                    'lr': f"{optimizer.param_groups[0]['lr']:.6f}"
+                    'lr': f"{optimizer.param_groups[0]['lr']:.6f}",
+                    'grad': f"{grad_stats['avg_grad']:.2e}"
                 })
             
             # Step scheduler
@@ -452,6 +470,47 @@ def main():
             logger.info(f"  Label: {avg_losses['label']:.4f}")
             logger.info(f"  Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
             
+            # ✅ Periodic debug checks (every 10 epochs)
+            if (epoch + 1) % 10 == 0:
+                logger.info("\n🔍 Running debug diagnostics...")
+                
+                # 1. Verify rotation task
+                try:
+                    rot_acc = verify_rotation_task(
+                        model, 
+                        train_dataset, 
+                        device,
+                        save_path=debug_dir / f'rotation_epoch_{epoch+1:04d}.png'
+                    )
+                    logger.info(f"  ✅ Rotation accuracy: {rot_acc:.2%}")
+                except Exception as e:
+                    logger.warning(f"  ⚠️ Rotation verification failed: {e}")
+                
+                # 2. Visualize embeddings
+                try:
+                    visualize_contrastive_embeddings(
+                        model,
+                        train_dataset,
+                        device,
+                        save_path=debug_dir / f'umap_epoch_{epoch+1:04d}.png'
+                    )
+                    logger.info(f"  ✅ UMAP visualization saved")
+                except Exception as e:
+                    logger.warning(f"  ⚠️ UMAP visualization failed: {e}")
+                
+                # 3. Plot gradient history
+                try:
+                    grad_monitor.plot_gradient_history(
+                        save_path=debug_dir / f'gradients_epoch_{epoch+1:04d}.png'
+                    )
+                    logger.info(f"  ✅ Gradient history plotted")
+                except Exception as e:
+                    logger.warning(f"  ⚠️ Gradient plotting failed: {e}")
+                
+                logger.info("")
+
+
+
             logger_csv.log(
                 phase="ssl",
                 epoch=epoch + 1,

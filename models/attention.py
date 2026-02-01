@@ -60,7 +60,9 @@ class CS_KNN_3D(nn.Module):
         
         # Learnable class token for center sampling
         self.class_token = nn.Parameter(torch.randn(1, 1, embed_dim))
-        
+        #=================Remove this ==================
+        nn.init.trunc_normal_(self.class_token, std=0.02)
+        #=============================================
         # Temperature for softmax
         self.temperature = nn.Parameter(torch.ones(1) * 0.07)
         
@@ -271,7 +273,16 @@ class HGA_NodeToHyperedge(nn.Module):
         self.qkv = nn.Linear(embed_dim, embed_dim * 3, bias=qkv_bias)
         self.proj = nn.Linear(embed_dim, embed_dim)
         self.dropout = nn.Dropout(dropout)
+#====================== remove ==========
+        self.apply(self._init_weights)
     
+    def _init_weights(self, m):
+        """Initialize HGA weights"""
+        if isinstance(m, nn.Linear):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+#============================================
     def forward(
         self, 
         nodes: torch.Tensor, 
@@ -358,7 +369,16 @@ class HGA_HyperedgeToNode(nn.Module):
         self.qkv = nn.Linear(embed_dim, embed_dim * 3, bias=qkv_bias)
         self.proj = nn.Linear(embed_dim, embed_dim)
         self.dropout = nn.Dropout(dropout)
+        #================ remove===================
+        self.apply(self._init_weights)
     
+    def _init_weights(self, m):
+        """Initialize HGA weights"""
+        if isinstance(m, nn.Linear):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+#=====================================================
     def forward(
         self,
         hyperedges: torch.Tensor,

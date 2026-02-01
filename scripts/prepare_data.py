@@ -1086,14 +1086,67 @@ def aggregate_metadata_unlabeled(
         Complete metadata dictionary
     """
     from sklearn.model_selection import train_test_split
-    
+    import json
+    import h5py
+    import numpy as np
+    from datetime import datetime
     logger.info("\n" + "="*80)
     logger.info("GENERATING FINAL METADATA.JSON")
     logger.info("="*80)
     
+    metadata_path = output_dir / "metadata.json"
+    existing_entries = {}
+
+    if metadata_path.exists():
+        logger.info("  🔁 Existing metadata.json found — merging.")
+        with open(metadata_path, "r") as f:
+            old_meta = json.load(f)
+
+        for split in ["train", "val", "test"]:
+            split_data = old_meta.get("data", {}).get(split)
+
+            # 🔒 OLD FORMAT: split contains only counts → nothing to merge
+            if not isinstance(split_data, list):
+                logger.warning(
+                    f"⚠️ metadata.json split '{split}' is not a list "
+                    f"(found {type(split_data).__name__}); skipping merge for this split."
+                )
+                continue
+
+            # ✅ NEW FORMAT: list of sample dicts
+            for sample in split_data:
+                if not isinstance(sample, dict):
+                    continue
+
+                key = (sample.get("marker_type"), sample.get("brain_name"))
+                if key[0] is not None and key[1] is not None:
+                    existing_entries[key] = sample
+    else:
+        logger.info("  🆕 No existing metadata.json — fresh generation.")
+
     # ============================================================================
     # STEP 1: Extract marker types for stratification
     # ============================================================================
+    merged_metadata = []
+
+    for sample in all_metadata:
+        key = (sample["marker_type"], sample["brain_name"])
+
+        if key in existing_entries:
+            old = existing_entries[key]
+
+            # 🔒 Preserve derived fields
+            for field in ["compression_ratio", "file_size_mb"]:
+                if field in old:
+                    sample[field] = old[field]
+
+        # Normalize invalid placeholders
+        if sample.get("compression_ratio") == "N/A (skipped)":
+            sample["compression_ratio"] = None
+
+        merged_metadata.append(sample)
+
+    all_metadata = merged_metadata
     marker_types = [vol['marker_type'] for vol in all_metadata]
     unique_markers = list(set(marker_types))
     
@@ -1209,6 +1262,24 @@ def aggregate_metadata_unlabeled(
             logger.warning(f"⚠️ Failed to load threshold from {h5_path.name}: {e}")
             vol_meta['global_threshold_norm'] = 0.95  # Safe default
     
+    # ---- SAFE numeric aggregation ----
+    compression_values = []
+
+    for m in all_metadata:
+        val = m.get('compression_ratio', None)
+
+        # accept only real numbers
+        if isinstance(val, (int, float)):
+            compression_values.append(val)
+
+    # compute average safely
+    avg_compression_ratio = (
+        sum(compression_values) / len(compression_values)
+        if compression_values else None
+    )   
+
+
+
     # ============================================================================
     # STEP 4: Build final metadata structure
     # ============================================================================
@@ -1237,12 +1308,16 @@ def aggregate_metadata_unlabeled(
         },
         'statistics': {
             'total_size_mb': sum(v['file_size_mb'] for v in all_metadata),
-            'avg_compression_ratio': sum(
-                v.get('compression_ratio', 1.0) for v in all_metadata
-            ) / len(all_metadata)
+            'avg_compression_ratio': avg_compression_ratio
         }
     }
     
+    num_skipped = len(all_metadata) - len(compression_values)
+
+    if num_skipped > 0:
+        logger.warning(
+            f"⚠️ Skipped {num_skipped} volumes with invalid compression_ratio"
+        )
     # ============================================================================
     # STEP 5: Write metadata.json
     # ============================================================================
@@ -1507,7 +1582,11 @@ def process_labeled_data(input_dir: Path, output_dir: Path, args) -> List[Dict]:
                     f['image'].attrs['marker_type'] = sample['marker_type']
                     f['image'].attrs['original_filename'] = sample['filename']
                     f['image'].attrs['shape'] = json.dumps(sample['shape'])
-                
+                    img_min, img_max = img.min(), img.max()
+                    f['image'].attrs['global_min'] = float(img_min)
+                    f['image'].attrs['global_max'] = float(img_max)
+                    f['image'].attrs['normalized'] = args.normalize
+
                 file_size_mb = output_file.stat().st_size / 1e6
                 
                 split_meta.append({

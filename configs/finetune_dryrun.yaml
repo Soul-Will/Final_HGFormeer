@@ -71,9 +71,9 @@ loss:
 
 data:
   # Data directories (full paths, no 'split' argument needed)
-  train_dir: "data/processed/volume_labeled/train"
-  val_dir: "data/processed/volume_labeled/val"
-  test_dir: "data/processed/volume_labeled/test"
+  train_dir: "data/processed/volumes_labeled/train"
+  val_dir: "data/processed/volumes_labeled/val"
+  test_dir: "data/processed/volumes_labeled/test"
   patch_size: [64, 128, 128]  # (D, H, W)
   samples_per_volume: 5  # Patches per volume per epoc
   # Augmentation settings

@@ -11,7 +11,7 @@ model:
 
 # Training hyperparameters
 training:
-  epochs: 2
+  epochs: 3
   batch_size: 2
   learning_rate: 1.0e-3
   min_lr: 1.0e-6
@@ -31,12 +31,14 @@ ssl_losses:
 # Data configuration
 data:
   # ✅ UPDATED: Points to pre-stacked volumes
-  data_dir: "data/processed/volumes_demo"
-  patch_size: [20, 128, 128]  # (D, H, W)
-  num_patches_per_brain: 10  # Per epoch
+  data_dir: "data/processed/volumes_ssl"
+  patch_size: [4, 128, 128]  # (D, H, W)
+  num_patches_per_brain: 5  # Per epoch
   num_workers: 1
   pin_memory: true
-
+  foreground_sampling: true
+  foreground_fraction: 0.7  # 70% foreground, 20% random
+  foreground_method: "otsu"
 # Augmentation (torchio-based)
 augmentation:
   use_augmentation: true

@@ -595,26 +595,67 @@ class SELMA3DDataset(Dataset):
         mask = torch.from_numpy(mask_patch.copy()).long()  # (D, H, W)
         
         # Apply transforms (synchronized for image + mask)
+        # if self.transform is not None:
+        #     try:
+                # import torchio as tio
+        #         subject = tio.Subject(
+        #             image=tio.ScalarImage(tensor=image),
+        #             mask=tio.LabelMap(tensor=mask.unsqueeze(0)) 
+        #         )
+        #         transformed = self.transform(subject)
+                
+        #         image = transformed.image.data
+        #         mask = transformed.mask.data.squeeze(0).long()
+            
+        #     except Exception as e:
+        #         # Add more context to the transform error
+        #         logger.error(f"Transform failed for {vol_info['filename']}")
+        #         logger.error(f"Image shape: {image.shape}, Mask shape: {mask.shape}")
+        #         logger.error(f"Error: {e}")
+        #         # Re-raise the error to stop the dataloader
+        #         raise RuntimeError(f"Transform failed for {vol_info['filename']}: {e}")
         if self.transform is not None:
             try:
                 import torchio as tio
-                subject = tio.Subject(
-                    image=tio.ScalarImage(tensor=image),
-                    mask=tio.LabelMap(tensor=mask.unsqueeze(0))
-                )
-                transformed = self.transform(subject)
-                
-                image = transformed.image.data
-                mask = transformed.mask.data.squeeze(0).long()
-            
+
+                image_std = float(image.std())
+
+                if image_std < 1e-6:
+            # 🔒 Zero-variance safety: spatial transforms only
+                    subject = tio.Subject(
+                        image=tio.ScalarImage(tensor=image),
+                        mask=tio.LabelMap(tensor=mask.unsqueeze(0))
+                    )
+
+                    safe_transforms = []
+                    for t in self.transform.transforms:
+                        if isinstance(t, (tio.RandomAffine, tio.RandomFlip)):
+                            safe_transforms.append(t)
+
+                    if safe_transforms:
+                        subject = tio.Compose(safe_transforms)(subject)
+
+                    image = subject.image.tensor
+                    mask = subject.mask.tensor.squeeze(0).long()
+
+                else:
+                 # ✅ Normal path: full transform
+                    subject = tio.Subject(
+                        image=tio.ScalarImage(tensor=image),
+                        mask=tio.LabelMap(tensor=mask.unsqueeze(0))
+                    )
+
+                    subject = self.transform(subject)
+
+                    image = subject.image.tensor
+                    mask = subject.mask.tensor.squeeze(0).long()
+
             except Exception as e:
-                # Add more context to the transform error
                 logger.error(f"Transform failed for {vol_info['filename']}")
                 logger.error(f"Image shape: {image.shape}, Mask shape: {mask.shape}")
                 logger.error(f"Error: {e}")
-                # Re-raise the error to stop the dataloader
                 raise RuntimeError(f"Transform failed for {vol_info['filename']}: {e}")
-        
+
         # Metadata
         metadata = {
             'filename': vol_info['filename'],
@@ -641,7 +682,7 @@ class SELMA3DDataset(Dataset):
 # UTILITY: VALIDATE METADATA
 # ============================================================================
 
-def validate_metadata_format(metadata: dict) -> None:
+def validate_metadata_format(metadata: dict, data_type: str | None = None) -> None:
     """
     Validate metadata.json format.
 
@@ -666,6 +707,9 @@ def validate_metadata_format(metadata: dict) -> None:
     # ============================
     # NEW: Split-aware format
     # ============================
+# ============================
+# NEW: Split-aware format
+# ============================
     if "data" in metadata:
         data_section = metadata["data"]
 
@@ -679,29 +723,36 @@ def validate_metadata_format(metadata: dict) -> None:
                 continue
 
             split = data_section[split_name]
-
-            if not isinstance(split, dict):
-                raise ValueError(f"'data.{split_name}' must be a dictionary")
-
-            if "volumes" not in split:
-                raise ValueError(
-                    f"Missing 'volumes' key in metadata['data']['{split_name}']"
-                )
-
-            if not isinstance(split["volumes"], list):
-                raise ValueError(
-                    f"'volumes' in data['{split_name}'] must be a list"
-                )
-
             found_any_split = True
+
+            # ✅ CASE 1: train = { "volumes": [...] }
+            if isinstance(split, dict):
+                if "volumes" not in split:
+                    raise ValueError(
+                        f"'data.{split_name}' is a dict but missing 'volumes'"
+                    )
+                if not isinstance(split["volumes"], list):
+                    raise ValueError(
+                        f"'data.{split_name}.volumes' must be a list"
+                    )
+
+        # ✅ CASE 2: train = [ ... ]  (legacy prepare_data.py)
+            elif isinstance(split, list):
+            # Accept directly
+                pass
+
+            else:
+                raise ValueError(
+                    f"'data.{split_name}' must be either a dict or a list"
+                )
 
         if not found_any_split:
             raise ValueError(
                 "metadata['data'] does not contain any of: train / val / test"
             )
 
-        # ✅ VALID split-aware metadata
         return
+
 
     # ============================
     # LEGACY: Flat format

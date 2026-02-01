@@ -62,7 +62,7 @@ class HGFormer3D(nn.Module):
         self.base_channels = base_channels
         self.depths = depths
         self.num_stages = len(depths)
-        
+
         # ✅ CRITICAL FIX: Store stride information
         self.stem_stride = stem_stride
         
@@ -140,10 +140,53 @@ class HGFormer3D(nn.Module):
             'marker': nn.Sequential(
                 nn.AdaptiveAvgPool3d(1),
                 nn.Flatten(),
-                nn.Linear(self.channels[-1], 4)
+                nn.Linear(self.channels[-1], 6)
             )
         })
+
+                # ==============This is the last changes (if any thing worng remove it)=============
+        self.apply(self._init_weights)
+        self._init_hypergraph_tokens()
+        #====================================
+    #===============(Remove this part if any error)==================================================
+    def _init_weights(self, m):
+        """
+        Research-grade weight initialization
+        
+        References:
+        - Kaiming Init: "Delving Deep into Rectifiers" (He et al., 2015)
+        - Xavier Init: "Understanding the difficulty of training..." (Glorot & Bengio, 2010)
+        - Transformer Init: "Attention is All You Need" (Vaswani et al., 2017)
+        """
+        if isinstance(m, nn.Conv3d):
+            # Kaiming Normal for conv layers (optimized for ReLU/GELU)
+            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        
+        elif isinstance(m, nn.Linear):
+            # Truncated normal for linear layers (transformer standard)
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        
+        elif isinstance(m, (nn.BatchNorm3d, nn.GroupNorm, nn.LayerNorm)):
+            # Standard normalization layer init
+            nn.init.constant_(m.weight, 1.0)
+            nn.init.constant_(m.bias, 0)
     
+    def _init_hypergraph_tokens(self):
+        """
+        Initialize class tokens in CS_KNN_3D modules
+        """
+        for stage in self.stages:
+            if hasattr(stage, 'hypergraph_constructor'):
+                hg = stage.hypergraph_constructor
+                if hasattr(hg, 'class_token'):
+                    # âœ… Fix: Use smaller std for stability
+                    nn.init.trunc_normal_(hg.class_token, std=0.02)
+                    logger.debug(f"Initialized class_token in stage {stage.stage_idx}")
+    #==========================================================================
     def _compute_total_downsample(self) -> Tuple[int, int, int]:
         """
         ✅ NEW: Compute total downsampling factor

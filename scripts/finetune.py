@@ -34,7 +34,7 @@ from utils.data_loader import SELMA3DDataset
 from utils.augmentations import get_finetune_transforms, get_val_transforms
 from utils.metrics import dice_coefficient, iou_score
 import torchio as tio
-
+from utils.training_logger import UnifiedTrainingLogger
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -402,6 +402,10 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
     
+    logger_csv = UnifiedTrainingLogger(
+    Path(config["paths"]["output_dir"]) / "training_log.csv"
+    )
+
     # Save config to output dir
     config_save_path = output_dir / 'finetune_config.yaml'
     with open(config_save_path, 'w') as f:
@@ -673,6 +677,26 @@ def main():
                 logger.info(f"    Val IoU: {val_metrics['iou']:.4f} ± {val_metrics['iou_std']:.4f}")
                 logger.info(f"    Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
                 
+
+                logger_csv.log(
+                    phase="finetune",
+                    epoch=epoch + 1,
+                    step=-1,
+
+                    train_loss=avg_train_losses["total"],
+                    train_dice_loss=avg_train_losses["dice"],
+                    train_focal_loss=avg_train_losses.get("focal"),
+                    train_boundary_loss=avg_train_losses.get("boundary"),
+                    loss_alpha=avg_train_losses.get("alpha"),
+
+                    val_dice=val_metrics["dice"],
+                    val_iou=val_metrics["iou"],
+
+                    learning_rate=optimizer.param_groups[0]["lr"]
+                )
+
+
+
                 # Step scheduler
                 if scheduler_type == 'ReduceLROnPlateau':
                     scheduler.step(val_metrics['dice'])

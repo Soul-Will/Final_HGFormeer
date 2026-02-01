@@ -22,7 +22,7 @@ from typing import Dict, List
 import h5py  # ✅ NEW: For loading .h5 ground truth
 
 import sys
-sys.path.append('..')
+sys.path.append('.')
 
 from utils.metrics import compute_all_metrics
 

@@ -22,9 +22,10 @@ import logging
 from typing import Dict, Tuple, Optional
 
 import sys
-sys.path.append('..')
+sys.path.append('.')
 
-from models import HGFormer3D, HGFormer3D_ForSegmentation
+from models.hgformer import HGFormer3D
+from models.decoder import HGFormer3D_ForSegmentation
 from utils.data_loader import SELMA3DDataset
 from utils.visualization import save_prediction_as_tif, plot_segmentation_results
 from utils.metrics import dice_coefficient, iou_score
@@ -123,7 +124,11 @@ def load_trained_model(checkpoint_path: str, device: torch.device) -> nn.Module:
     logger.info(f"Loading model from: {checkpoint_path}")
     
     try:
-        checkpoint = torch.load(checkpoint_path, map_location=device)
+        checkpoint = torch.load(
+            checkpoint_path,
+            map_location=device,
+            weights_only=False  # 🔴 REQUIRED for full checkpoint dict
+        )
     except Exception as e:
         raise RuntimeError(f"Failed to load checkpoint: {e}")
     
@@ -324,15 +329,23 @@ def inference_on_volume(
             """Wrapper for MONAI sliding_window_inference"""
             return model(vol)
         
+        # probs = sliding_window_inference(
+        #     inputs=volume,
+        #     roi_size=roi_size,
+        #     sw_batch_size=args.sw_batch_size,
+        #     predictor=predictor,
+        #     overlap=args.sw_overlap,
+        #     mode=args.sw_mode,
+        #     device=device
+        # )
         probs = sliding_window_inference(
-            inputs=volume,
-            roi_size=roi_size,
-            sw_batch_size=args.sw_batch_size,
-            predictor=predictor,
-            overlap=args.sw_overlap,
-            mode=args.sw_mode,
-            device=device
-        )
+        inputs=volume.to(device),        # (1,1,D,H,W)
+        roi_size=tuple(args.sw_roi_size), # (64,128,128)
+        sw_batch_size=args.sw_batch_size,
+        predictor=model,
+        overlap=args.sw_overlap,
+        mode=args.sw_mode
+    )
         probs = torch.softmax(probs, dim=1)
     
     # Strategy 3: Standard inference
@@ -343,11 +356,11 @@ def inference_on_volume(
             probs = torch.softmax(logits, dim=1)
     
     # Get predictions
-    pred = torch.argmax(probs, dim=1)  # (1, D, H, W)
+    pred = torch.argmax(probs, dim=1).squeeze(0)  # (1, D, H, W)
     
     # Convert to numpy
-    pred_np = pred[0].cpu().numpy()  # (D, H, W)
-    probs_np = probs[0].cpu().numpy()  # (num_classes, D, H, W)
+    pred_np = pred.detach().cpu().numpy()  # (D, H, W)
+    probs_np = probs[0].detach().cpu().numpy()  # (num_classes, D, H, W)
     
     return pred_np, probs_np
 
@@ -517,6 +530,8 @@ def main():
             prediction, probabilities = inference_on_volume(
                 model, volume, device, args
             )
+            assert prediction.ndim == 3, f"Prediction is not 3D: {prediction.shape}"
+            logger.debug(f"Success: Full volume prediction shape {prediction.shape}")
         except Exception as e:
             logger.error(f"Inference failed for sample {idx}: {e}")
             logger.exception("Full traceback:")
